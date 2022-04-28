@@ -13,6 +13,17 @@ def parse_int(n):
         return float("nan")
 
 
+### Functionality Helper Functions ###
+def parse_float(n):
+    """
+    Securely converts a non-numeric value to float.
+    """
+    try:
+        return float(n)
+    except ValueError:
+        return float("nan")
+
+
 def build_validation_result(is_valid, violated_slot, message_content):
     """
     Define a result message structured as Lex response.
@@ -25,6 +36,46 @@ def build_validation_result(is_valid, violated_slot, message_content):
         "violatedSlot": violated_slot,
         "message": {"contentType": "PlainText", "content": message_content},
     }
+
+
+def validate_data(age, investment_amount, intent_request):
+    """
+    Validates the data provided by the user.
+    """
+
+    # Validate that the user's age is greater than zero and less than 65
+    if age is not None:
+        age = parse_int(age)
+        if age < 0:
+            return build_validation_result(
+                False,
+                "age",
+                "This is an invalid age. The minimum age to contract this service is 0, "
+                "can you provide an age between 0 and 64 please?",
+            )
+        elif  age >= 65:
+            return build_validation_result(
+                False,
+                "age",
+                "The maximum age to contract this service is 64, "
+                "can you provide an age between 0 and 64 please?",
+            )
+
+    # Validate the investment amount, it should be >= 5000
+    if investment_amount is not None:
+        investment_amount = parse_float(
+            investment_amount
+        )  # Since parameters are strings it's important to cast values
+        if investment_amount < 5000:
+            return build_validation_result(
+                False,
+                "investmentAmount",
+                "The minimum investment amount is $5,000 CAD, "
+                "could you please provide a greater amount?",
+            )
+
+    # A True results is returned if age or investment amount are valid
+    return build_validation_result(True, None, None)
 
 
 ### Dialog Actions Helper Functions ###
@@ -80,6 +131,27 @@ def close(session_attributes, fulfillment_state, message):
     return response
 
 
+def investment_recommendation(risk_level):
+    """
+    Returns an investment recommendation based on the risk level.
+    """
+    
+    if risk_level == "None":
+        recommendation = "100% bonds (AGG), 0% equities (SPY)"
+    elif risk_level == "Very Low":
+        recommendation = "80% bonds (AGG), 20% equities (SPY)"
+    elif risk_level == "Low":
+        recommendation = "60% bonds (AGG), 40% equities (SPY)"
+    elif risk_level == "Medium":
+        recommendation = "40% bonds (AGG), 60% equities (SPY)"
+    elif risk_level == "High":
+        recommendation = "20% bonds (AGG), 80% equities (SPY)"
+    elif risk_level == "Very High":
+        recommendation = "0% bonds (AGG), 100% equities (SPY)"
+
+    return recommendation
+
+
 ### Intents Handlers ###
 def recommend_portfolio(intent_request):
     """
@@ -87,82 +159,57 @@ def recommend_portfolio(intent_request):
     """
 
     first_name = get_slots(intent_request)["firstName"]
-    age = int(get_slots(intent_request)["age"])
-    investment_amount = float(get_slots(intent_request)["investmentAmount"])
-    risk_level = str(get_slots(intent_request)["riskLevel"])
+    age = get_slots(intent_request)["age"]
+    investment_amount = get_slots(intent_request)["investmentAmount"]
+    risk_level = get_slots(intent_request)["riskLevel"]
     source = intent_request["invocationSource"]
-    
-    if  risk_level == 'none':
-        initial_recommendation = '100% bonds (AGG), 0% equities (SPY)'
-    elif risk_level == 'very low':
-        initial_recommendation = '80% bonds (AGG), 20% equities (SPY)'
-    elif risk_level == 'low':
-        initial_recommendation = '60% bonds (AGG), 40% equities (SPY)'
-    elif risk_level == 'medium':
-        initial_recommendation = '40% bonds (AGG), 60% equities (SPY)'
-    elif risk_level == 'high':
-        initial_recommendation = '20% bonds (AGG), 80% equities (SPY)'
-    elif risk_level == 'very high':
-        initial_recommendation = '0% bonds (AGG), 100% equities (SPY)'
-
 
     if source == "DialogCodeHook":
-         #Perform basic validation on the supplied input slots.
-        cutoff = 65
-        if age is not None:
-            if age > 65 or age < 1:
-                return build_validation_result(
-                False,
-                age,
-                first_name +', you should be older than 18 and younger than 65 to use this service, please try again'
-            )
-         #Use the elicitSlot dialog action to re-prompt
-            #elicit_slot(age)
-         #for the first violation detected.
+        # Perform basic validation on the supplied input slots.
+        # Use the elicitSlot dialog action to re-prompt
+        # for the first violation detected.
+
+        # Gets all the slots
+        slots = get_slots(intent_request)
+        # Validate user's input using the validate_data function
+        validation_result = validate_data(age, investment_amount, intent_request)
         
-        ### YOUR DATA VALIDATION CODE STARTS HERE ###
-    if investment_amount is not None:
-            #investment_amount = float(investment_amount)
-        if investment_amount < 5000:
-            return build_validation_result(
-                False,
-                investment_amount,
-                first_name+ ', please invest an amount greater than $5000, please try again'
-        )
-            #elicit_slot(investmentAmount)
-        ### YOUR DATA VALIDATION CODE ENDS HERE ###
+        # If the data provided by the user is not valid,
+        # the elicitSlot dialog action is used to re-prompt for the first violation detected.
+        if not validation_result["isValid"]:
+            slots[validation_result["violatedSlot"]] = None  # Cleans invalid slot
+
+            # Returns an elicitSlot dialog to request new data for the invalid slot
+            return elicit_slot(
+                intent_request["sessionAttributes"],
+                intent_request["currentIntent"]["name"],
+                slots,
+                validation_result["violatedSlot"],
+                validation_result["message"],
+            )
+
+        # Fetch current session attributes
+        output_session_attributes = intent_request["sessionAttributes"]
+
+        # Once all slots are valid, a delegate dialog is returned to Lex to choose the next course of action.
+        return delegate(output_session_attributes, get_slots(intent_request))
+
+    # Get the initial investment recommendation
+    initial_recommendation = investment_recommendation(risk_level)
+
+    # Return a message with the initial recommendation based on the risk level.
     return close(
-            intent_request["sessionAttributes"],
-            "Fulfilled",
-            {
+        intent_request["sessionAttributes"],
+        "Fulfilled",
+        {
             "contentType": "PlainText",
-            "content": """{}, thank you for your information;
+            "content": """{} thank you for your information;
             based on the risk level you defined, my recommendation is to choose an investment portfolio with {}
             """.format(
                 first_name, initial_recommendation
-                ),
-            },
-        )
-        # Fetch current session attibutes
-    #output_session_attributes = intent_request["sessionAttributes"]
-
-    #return delegate(output_session_attributes, get_slots(intent_request))
-
-    # Get the initial investment recommendation
-        
-#def risk_recommendation (risk_level):        
-        ### YOUR FINAL INVESTMENT RECOMMENDATION CODE STARTS HERE ###
-        
-
-
-        #return initial_recommendation
-        
-    #initial_recommendation = risk_recommendation(risk_level)
-
-    ### YOUR FINAL INVESTMENT RECOMMENDATION CODE ENDS HERE ###
-
-    # Return a message with the initial recommendation based on the risk level.
-
+            ),
+        },
+    )
 
 
 ### Intents Dispatcher ###
@@ -176,7 +223,7 @@ def dispatch(intent_request):
     # Dispatch to bot's intent handlers
     if intent_name == "RecommendPortfolio":
         return recommend_portfolio(intent_request)
-    
+
     raise Exception("Intent with name " + intent_name + " not supported")
 
 
@@ -188,4 +235,3 @@ def lambda_handler(event, context):
     """
 
     return dispatch(event)
-
